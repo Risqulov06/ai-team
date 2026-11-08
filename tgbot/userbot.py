@@ -1,4 +1,6 @@
-"""Read your own Telegram (MTProto, as your account, via Telethon) for the agent and the timetable. Read-only.
+"""Read your own Telegram (MTProto, as your account, via Telethon) for the agent and the timetable.
+
+This file only reads. Actions (send, stories, profile, bots) live in tg.py and run only after your ✅ in the bot.
 
 The bot only sees groups it was added to. This sees every chat your account sees, so the timetable and
 the agent can work from your real conversations. It never sends, edits, deletes or marks anything read.

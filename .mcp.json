@@ -2,8 +2,19 @@
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "env": { "MEMORY_FILE_PATH": "${PWD}/brain/memory.jsonl" }
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {
+        "MEMORY_FILE_PATH": "${PWD}/brain/memory.jsonl"
+      }
+    },
+    "telegram": {
+      "command": "python3",
+      "args": [
+        "tgbot/tg_mcp.py"
+      ]
     }
   }
 }

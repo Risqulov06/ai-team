@@ -13,7 +13,9 @@
       "Edit(done/**)",
       "mcp__memory",
       "Skill",
-      "Write(out/**)"
+      "Write(out/**)",
+      "mcp__telegram",
+      "Bash(python3 tgbot/tg.py:*)"
     ],
     "ask": [
       "Bash(git push:*)",
@@ -23,7 +25,12 @@
       "Bash(rm:*)",
       "Bash(curl:*)",
       "Bash(wget:*)",
-      "Read(.env)"
+      "Read(.env)",
+      "Read(.secrets/**)",
+      "Edit(.secrets/**)",
+      "Write(.secrets/**)",
+      "Edit(inbox/telegram/actions/**)",
+      "Write(inbox/telegram/actions/**)"
     ]
   },
   "enableAllProjectMcpServers": true
