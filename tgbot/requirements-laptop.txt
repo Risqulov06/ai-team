@@ -1,0 +1,3 @@
+# Extra packages for a personal laptop (Windows / macOS / Linux), installed by tgbot/service.py into .venv.
+# Telethon: your own Telegram account (reading chats, /ai actions after your ✅).
+telethon>=1.36

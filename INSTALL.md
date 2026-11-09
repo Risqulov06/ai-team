@@ -9,6 +9,7 @@ Bu qo'llanma AI jamoangizni (Telegram bot, storislar, kontent-reja, subtitrli mo
 | **A. Claude ilovasi (o'rnatishsiz)** | Storislar, kontent-reja, ssenariy, caption | Claude obunangiz ichida | Eng oson |
 | **B. Android telefon** | Hammasi: bot, storislar, **subtitrli montaj**, xarajatlar, AI-agent | Bepul (ElevenLabs ixtiyoriy) | O'rtacha, 30–60 daqiqa |
 | **C. Render server (bepul)** | Bot, reja, eslatmalar, xarajatlar. **Montaj ishlamaydi** | Bepul | O'rtacha, iPhone uchun |
+| **D. Shaxsiy noutbuk** | Hammasi + avto-start, internet qaytganda avto-ulanish | Bepul | Oson: [LAPTOP.md](LAPTOP.md) |
 
 Faqat storis va kontent yozdirmoqchi bo'lsangiz, **A** yetarli. Videoga subtitr qo'ydirmoqchi bo'lsangiz, **B** kerak.
 

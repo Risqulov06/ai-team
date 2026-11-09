@@ -13,13 +13,14 @@ Statuses: new -> asked -> (later -> asked ...) -> approved -> done | failed
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import secrets
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from filelock import locked
 
 ROOT = Path(__file__).resolve().parents[1]
 DIR = Path(os.getenv("TG_ACTIONS_DIR", ROOT / "inbox" / "telegram" / "actions"))
@@ -47,12 +48,8 @@ def _now() -> datetime:
 @contextmanager
 def _locked():
     DIR.mkdir(parents=True, exist_ok=True)
-    with open(DIR / ".lock", "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    with locked(DIR / ".lock"):
+        yield
 
 
 def _path(aid: str) -> Path:
