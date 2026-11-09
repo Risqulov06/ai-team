@@ -20,3 +20,4 @@ node_modules/
 !inbox/biz/*/
 inbox/biz/*/*
 !inbox/biz/*/README.md
+.venv/

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import fcntl
 import json
 import os
 import sys
@@ -33,6 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import db  # noqa: E402,F401  (loads .env / .env.local)
+from filelock import locked  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SECRETS = Path(os.getenv("TG_SECRETS_DIR", ROOT / ".secrets"))
@@ -55,12 +55,8 @@ def one_at_a_time():
     """The bot's sync job and the agent may both call this; one session file, one connection at a time."""
     SECRETS.mkdir(parents=True, exist_ok=True)
     os.chmod(SECRETS, 0o700)
-    with open(SECRETS / "telegram.lock", "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    with locked(SECRETS / "telegram.lock"):
+        yield
 
 
 def client():

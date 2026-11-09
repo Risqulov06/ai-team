@@ -14,6 +14,8 @@
 
 **O'rnatish:** [INSTALL.md](INSTALL.md) — o'zbekcha, qadamma-qadam.
 
+**Shaxsiy noutbuk (Windows / macOS / Linux):** [LAPTOP.md](LAPTOP.md) — `install.bat` yoki `bash install.sh`: avto-start, fonda ishlash, internet qaytganda avto-ulanish.
+
 Botga misol: *"Shoxsaroy uchun 6 kunlik storis rejasi tuz"*, *"Universitet uchun haftalik kontent-reja"*.
 
 ---
