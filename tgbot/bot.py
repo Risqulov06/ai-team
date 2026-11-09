@@ -24,13 +24,17 @@ import montaj  # noqa: E402
 import schedule  # noqa: E402
 import userbot  # noqa: E402
 import store  # noqa: E402
+import actions  # noqa: E402
+import team  # noqa: E402
+import tg  # noqa: E402
 
 
 db.load_env_files()  # already ran when store imported db; kept so the order is explicit
 
-from telegram import Update  # noqa: E402
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
 from telegram.ext import (  # noqa: E402
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -47,7 +51,23 @@ ALLOWED = {int(x) for x in re.findall(r"-?\d+", os.getenv("ALLOWED_USER_IDS", ""
 HELP = """🤖 AI yordamchi — kunlik reja, content plan, biznes avtomatlashtirish
 
 💬 AI agent (Claude Code): shu chatga oddiy matn yozing — savol, topshiriq, "bugun kim nima yozdi?"
-/new — yangi suhbat   /ai — agent va Telegram ulanishi holati   /sync — o'z chatlaringizni hozir o'qish
+/ai <buyruq> — Telegramingiz bo'yicha istalgan ish, masalan:
+   /ai Aliga yoz: ertaga 9 da obyektda bo'lsin
+   /ai "Shoxsaroy" guruhiga bugungi rejani yoz
+   /ai profil bio sini "Qurilish bo'yicha mutaxassis" qil
+   /ai out/stories/shoxsaroy/1.jpg ni storisga qo'y
+   /ai @SomeBot ga /start yubor va javobini ayt
+   (har bir amal oldidan ruxsat so'rayman: ✅ / ❌ / ⏰ — javob bermasangiz har soatda qayta so'rayman;
+    o'sha chatga o'zingiz yozib qo'ysangiz, men to'xtayman)
+/ai — holat   /new — yangi suhbat   /sync — o'z chatlaringizni hozir o'qish
+/navbat — ruxsat kutayotgan amallar   /kotib — javob kutayotgan xabarlarga hozir javob tayyorlash
+/reja — bugungi ish rejangizni AI tuzadi
+
+👷 Ishchilar:
+/ishchi @username Ism 09:00 — qo'shish (ish boshlanish vaqti bilan)
+/ishchilar — ro'yxat   /ishchi_ochir <id>   /keldi <ism> — keldi deb belgilash
+/davomat — bugun kim keldi, kim kelmadi va sababi
+(ish boshlanishidan oldin ogohlantirish, kelmaganlardan sababini so'rash — ruxsatingiz bilan)
 
 📥 Bot guruh/chatdagi xabarlarni o'qib, ulardan vazifalarni ajratadi.
 
@@ -491,6 +511,20 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await guard(update):
         return
+    if update.effective_chat.type == "private":
+        settings = store.load_settings()
+        if settings.get("owner_chat_id") != update.effective_chat.id:
+            settings["owner_chat_id"] = update.effective_chat.id      # approval requests come here
+            store.save_settings(settings)
+    order = " ".join(context.args or []).strip()
+    if order:
+        if not agent_on():
+            await update.effective_message.reply_text("🤖 Agent o'chiq. /ai (bo'sh) — nima yetishmasligini ko'rsataman.")
+            return
+        prompt = ("Egasining Telegram bo'yicha buyrug'i (telegramchi agenti qoidalari bilan bajar; Telegramda "
+                  "o'zgartiradigan har bir amal faqat tg_* TAKLIF tool lari orqali, ruxsat navbatiga):\n" + order)
+        context.application.create_task(_agent_reply(update, context, prompt))
+        return
     problem = agent.ready()
     lines = [
         "🤖 Agent (Claude Code): " + ("✅ yoqilgan — oddiy matn yozing" if agent_on() else "❌ o'chiq"),
@@ -498,6 +532,13 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         *( ["   ALLOWED_USER_IDS bo'sh: agent faqat egasi uchun ishlaydi (/whoami → .env)"] if not ALLOWED else []),
         "📨 Telegram (sizning akkauntingiz): " + ("✅ ulangan" if userbot.configured() else
                                                  "❌ ulanmagan — python3 tgbot/userbot.py login"),
+        "📨 Kotib (kelgan xabarlarga javob taklifi): " + (
+            f"✅ har {os.getenv('AUTO_REPLY_MINUTES', '30')} daqiqada, {os.getenv('WORK_START', '09:00')}–"
+            f"{os.getenv('WORK_END', '19:00')}" if secretary_on() else "❌ o'chiq"),
+        f"🔐 Ruxsat kutayotgan amallar: {len(actions.open_actions())} (/navbat)",
+        f"👷 Ishchilar: {len(team.workers())} (/ishchilar)",
+        "",
+        "Buyruq berish: /ai <nima qilish kerak>",
     ]
     await update.effective_message.reply_text("\n".join(lines))
 
@@ -633,6 +674,237 @@ async def flush_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db.flush()
 
 
+# ---------- your Telegram account: the approval queue ----------
+
+AUTO_APPROVE = {k.strip() for k in os.getenv("TG_AUTO_APPROVE", "").split(",") if k.strip()}
+
+
+def owner_chat() -> int | None:
+    """Where approval requests go: your private chat with the bot."""
+    settings = store.load_settings()
+    return settings.get("owner_chat_id") or (sorted(ALLOWED)[0] if ALLOWED else None) or settings.get("report_chat_id")
+
+
+def _buttons(aid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Ruxsat", callback_data=f"act:ok:{aid}"),
+        InlineKeyboardButton("❌ Rad", callback_data=f"act:no:{aid}"),
+        InlineKeyboardButton(f"⏰ {actions.ASK_EVERY_MIN} daqiqadan keyin", callback_data=f"act:later:{aid}"),
+    ]])
+
+
+async def _do(context: ContextTypes.DEFAULT_TYPE, act: dict) -> str:
+    """Execute an approved action (in a thread: Telethon has its own loop there) and record the result."""
+    actions.set_status(act["id"], "approved", approved_at=now().isoformat(timespec="seconds"))
+    res = await asyncio.to_thread(tg.execute, act)
+    status = "skipped" if res.get("skipped") else "failed" if res.get("failed") else "done"
+    actions.set_status(act["id"], status, result=res)
+    icon = {"done": "✅", "skipped": "🙌", "failed": "⚠️"}[status]
+    return f"{icon} {res.get('note', status)}"
+
+
+async def approval_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Every minute: ask about new actions; ask again about unanswered ones every ASK_EVERY_MIN minutes."""
+    chat_id = owner_chat()
+    if not chat_id:
+        return
+    for act in actions.open_actions():
+        if not actions.due_for_asking(act):
+            continue
+        if act["status"] != "new":                       # asking again: is it still needed?
+            if act.get("asks", 0) >= actions.ASK_MAX:
+                actions.set_status(act["id"], "expired")
+                await context.bot.send_message(chat_id, f"⌛️ #{act['id']} {actions.ASK_MAX} marta so'raldi, javob "
+                                                        "bo'lmadi — bekor qilindi.")
+                continue
+            check = await asyncio.to_thread(tg.still_needed, act)
+            if not check.get("needed", True):
+                actions.set_status(act["id"], "skipped", result={"note": check.get("note")})
+                await _drop_ask(context, act)
+                await context.bot.send_message(chat_id, f"🙌 #{act['id']}: {check.get('note')}")
+                continue
+        if act["kind"] in AUTO_APPROVE:
+            await context.bot.send_message(chat_id, actions.describe(act) + "\n\n(avto-ruxsat)\n" + await _do(context, act))
+            continue
+        await _drop_ask(context, act)
+        m = await context.bot.send_message(chat_id, ("🔐 Ruxsat berasizmi?\n\n" + actions.describe(act))[:3900],
+                                           reply_markup=_buttons(act["id"]))
+        actions.set_status(act["id"], "asked", asked_at=now().isoformat(timespec="seconds"),
+                           asks=act.get("asks", 0) + 1, ask_msg=[chat_id, m.message_id])
+
+
+async def _drop_ask(context: ContextTypes.DEFAULT_TYPE, act: dict) -> None:
+    """Remove the previous request message, so only the latest one has buttons."""
+    if act.get("ask_msg"):
+        try:
+            await context.bot.delete_message(*act["ask_msg"])
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    if not allowed(update):
+        await q.answer("⛔ Ruxsat yo'q", show_alert=True)
+        return
+    _, verb, aid = q.data.split(":", 2)
+    act = actions.get(aid)
+    if not act or act["status"] not in ("new", "asked", "later"):
+        await q.answer("Bu amal allaqachon yopilgan")
+        await q.edit_message_reply_markup(None)
+        return
+    head = actions.describe(act)[:3500]
+    if verb == "no":
+        actions.set_status(aid, "rejected")
+        await q.answer("Rad etildi")
+        await q.edit_message_text(head + "\n\n❌ Rad etildi")
+    elif verb == "later":
+        actions.set_status(aid, "later", asked_at=now().isoformat(timespec="seconds"))
+        await q.answer("Keyinroq so'rayman")
+        await q.edit_message_text(head + f"\n\n⏰ {actions.ASK_EVERY_MIN} daqiqadan keyin yana so'rayman")
+    else:
+        await q.answer("Bajarilmoqda…")
+        await q.edit_message_text(head + "\n\n⏳ Bajarilmoqda…")
+        await q.edit_message_text(head + "\n\n" + await _do(context, act))
+
+
+async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard(update):
+        return
+    rows = actions.open_actions()
+    if not rows:
+        await update.effective_message.reply_text("🔐 Ruxsat kutayotgan amal yo'q.")
+        return
+    for act in rows[:10]:
+        await update.effective_message.reply_text(actions.describe(act), reply_markup=_buttons(act["id"]))
+
+
+# ---------- secretary: answers to incoming messages, by your work plan ----------
+
+KOTIB_PROMPT = """Sen egasining kotibisan (kotib agenti, .claude/agents/kotib.md qoidalari bo'yicha ish qil).
+1. tg_pending (yoki: python3 tgbot/tg.py pending) — javob kutayotgan chatlarni ol.
+2. Egasining bugungi rejasi: python3 tgbot/cli.py today ; ochiq vazifalar out/timetable/tasks.json.
+3. Har bir chat uchun egasi nomidan qisqa, xushmuomala javob yoz — rejaga mos (masalan: band bo'lsa qachon
+   bo'shashini ayt, uchrashuv so'rasa rejadagi bo'sh vaqtni taklif qil). Mijoz savollariga faqat inbox/biz/ dagi
+   faktlar bilan javob ber; bilmasang "aniqlab, tez orada yozaman" de. Narx, va'da, chegirma to'qima.
+4. Har bir javobni TAKLIF qil: tg_send (to = chat_id, reply_to = last_id, dedupe = reply:<chat_id>:<last_id>,
+   why = nima uchun shu javob). Spam, reklama, "rahmat"/"ok" kabi javob shart bo'lmagan xabarlarni o'tkazib yubor.
+5. Hech narsani o'zing yuborma — faqat taklif. Oxirida bitta qator: nechta taklif qilding. Taklif bo'lmasa: NONE"""
+
+
+def secretary_on() -> bool:
+    return os.getenv("AUTO_REPLY", "1") != "0" and agent_on() and userbot.configured()
+
+
+async def kotib_run(context: ContextTypes.DEFAULT_TYPE) -> str:
+    res = await agent.ask(KOTIB_PROMPT, None)
+    text = (res.get("text") or res.get("error") or "").strip()
+    log.info("kotib: %s", text[:300])
+    return text
+
+
+async def kotib_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not secretary_on():
+        return
+    n = now()
+    if not (os.getenv("WORK_START", "09:00") <= n.strftime("%H:%M") <= os.getenv("WORK_END", "19:00")):
+        return
+    await kotib_run(context)
+
+
+async def cmd_kotib(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard(update):
+        return
+    if not (agent_on() and userbot.configured()):
+        await update.effective_message.reply_text("Kotib uchun agent va Telegram akkaunt ulangan bo'lishi kerak (/ai).")
+        return
+    await update.effective_message.reply_text("📨 Javob kutayotgan xabarlarni ko'rib chiqyapman…")
+    text = await kotib_run(context)
+    await reply_long(update, "📨 " + (text if text and text != "NONE" else "Javob kerak bo'lgan yangi xabar yo'q."))
+
+
+# ---------- workers: warnings and attendance ----------
+
+async def attendance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    n = now()
+    if not team.workers():
+        return
+    if userbot.configured() and team.late_window(n):
+        await run_userbot("sync")                       # fresh "keldim" messages before asking anyone why
+    for item in team.tick(n):
+        actions.propose(item["kind"], item["params"], why=item["why"], by="nazoratchi", dedupe=item["dedupe"])
+
+
+async def evening_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = owner_chat()
+    if chat_id and team.workers():
+        await context.bot.send_message(chat_id, team.report(now()))
+
+
+async def cmd_worker_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard(update):
+        return
+    text = " ".join(context.args or [])
+    m = re.match(r"\s*(\S+)\s+(.+?)(?:\s+([01]?\d|2[0-3])[:.]([0-5]\d))?\s*$", text)
+    if not m:
+        await update.effective_message.reply_text("Misol: /ishchi @ali_usta Ali 09:00\n(@username o'rniga telefon "
+                                                  "+998901234567 yoki chat nomi ham bo'ladi)")
+        return
+    start = f"{int(m.group(3)):02d}:{m.group(4)}" if m.group(3) else os.getenv("WORK_START", "09:00")
+    w = team.add(m.group(1), m.group(2).strip(), start)
+    await update.effective_message.reply_text(
+        f"👷 #{w['id']} {w['name']} ({w['tg']}) — ish {w['start']} da, kunlar: {','.join(w['days'])}.\n"
+        f"{team.WARN_BEFORE} daqiqa oldin ogohlantiraman, {team.LATE_AFTER} daqiqadan keyin «keldim» yozmasa "
+        "sababini so'rayman — har safar ruxsatingiz bilan.")
+
+
+async def cmd_workers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard(update):
+        return
+    rows = team.workers()
+    await update.effective_message.reply_text(
+        "👷 Ishchilar:\n" + "\n".join(f"#{w['id']} {w['name']} {w['tg']} — {w['start']}" for w in rows)
+        if rows else "Ro'yxat bo'sh. /ishchi @username Ism 09:00")
+
+
+async def cmd_worker_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard(update):
+        return
+    ids = [int(x) for x in re.findall(r"\d+", " ".join(context.args or []))]
+    gone = [w for w in (team.remove(i) for i in ids) if w]
+    await update.effective_message.reply_text(
+        "Ro'yxatdan chiqarildi: " + ", ".join(w["name"] for w in gone) if gone else "Misol: /ishchi_ochir 2")
+
+
+async def cmd_came(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard(update):
+        return
+    w = team.find(" ".join(context.args or []))
+    if not w:
+        await update.effective_message.reply_text("Misol: /keldi Ali")
+        return
+    team.mark_came(w, now())
+    await update.effective_message.reply_text(f"🟢 {w['name']} keldi deb belgilandi ({now():%H:%M}).")
+
+
+async def cmd_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await guard(update):
+        await reply_long(update, team.report(now()))
+
+
+async def cmd_reja(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard(update):
+        return
+    if not agent_on():
+        await reply_long(update, schedule.day_text(store.load_tasks(), today(), _settings_recurring()))
+        return
+    extra = " ".join(context.args or [])
+    prompt = ("Bugungi ish rejamni tuz (scheduler agenti): python3 tgbot/userbot.py sync, python3 tgbot/cli.py scan, "
+              "keyin python3 tgbot/cli.py today; chatlardagi va'dalar, ishchilar davomati (inbox/telegram/attendance.json) "
+              "va ochiq vazifalarni hisobga ol. Vaqt bo'yicha qisqa ro'yxat, keyin ogohlantirishlar. " + extra)
+    context.application.create_task(_agent_reply(update, context, prompt))
+
+
 def schedule_daily(app: Application) -> None:
     for job in app.job_queue.get_jobs_by_name("daily"):
         job.schedule_removal()
@@ -655,9 +927,13 @@ def main() -> None:
         "hisobot": cmd_report, "report": cmd_report, "sms": cmd_sms,
         "edit": cmd_edit, "montaj": cmd_edit,
         "new": cmd_new, "ai": cmd_ai, "sync": cmd_sync,
+        "navbat": cmd_queue, "queue": cmd_queue, "kotib": cmd_kotib, "reja": cmd_reja,
+        "ishchi": cmd_worker_add, "ishchilar": cmd_workers, "ishchi_ochir": cmd_worker_remove,
+        "keldi": cmd_came, "davomat": cmd_attendance,
     }
     for name, fn in commands.items():
         app.add_handler(CommandHandler(name, fn))
+    app.add_handler(CallbackQueryHandler(on_approval, pattern=r"^act:(ok|no|later):"))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.VIDEO | filters.Document.VIDEO), on_video))
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, on_message))
     schedule_daily(app)
@@ -667,6 +943,12 @@ def main() -> None:
     app.job_queue.run_repeating(flush_job, interval=600, first=600, name="db-flush")
     app.job_queue.run_repeating(userbot_job, interval=60 * int(os.getenv("TG_SYNC_MINUTES", "10")), first=90,
                                 name="userbot-sync")
+    app.job_queue.run_repeating(approval_job, interval=60, first=20, name="approvals")
+    app.job_queue.run_repeating(attendance_job, interval=300, first=45, name="attendance")
+    app.job_queue.run_repeating(kotib_job, interval=60 * max(5, int(os.getenv("AUTO_REPLY_MINUTES", "30"))),
+                                first=300, name="kotib")
+    eh, em = os.getenv("WORK_END", "19:00").split(":")
+    app.job_queue.run_daily(evening_job, time=time(int(eh), int(em), tzinfo=TZ), name="evening")
     log.info("Bot ishga tushdi. Daily report at %s (%s)", store.load_settings()["daily_time"], TZ)
     base_url = (os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
     try:

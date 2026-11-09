@@ -2,7 +2,7 @@
 # AI agent in Telegram on an Android phone (Termux), run once after setup-termux.sh:
 #   bash setup-agent.sh
 # 1) Ubuntu inside Termux (proot-distro) with Claude Code in it: Claude Code has no Android build.
-# 2) Telethon (MTProto) so the agent can read your own Telegram chats, read-only.
+# 2) Telethon (MTProto): the agent reads your Telegram and, after your OK in the bot, acts in it.
 # 3) CLAUDE_CMD in .env, so the bot hands your messages to Claude Code.
 # Needs ~1.5 GB free. No root.
 set -e
@@ -17,14 +17,14 @@ proot-distro login ubuntu -- bash -lc '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get install -y curl ca-certificates git python3 python3-pip tzdata
-  python3 -m pip install --break-system-packages -q telethon tzdata
+  python3 -m pip install --break-system-packages -q -U "telethon>=1.36" tzdata
   export PATH="$HOME/.local/bin:$PATH"
   command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash
   claude --version
 '
 
 # the bot (in Termux) also reads your chats on a timer
-python -m pip install --use-pep517 telethon
+python -m pip install --use-pep517 -U "telethon>=1.36"
 
 [ -f .env ] || cp .env.example .env
 grep -v -E '^CLAUDE_CMD=' .env > .env.new || true
@@ -41,7 +41,7 @@ Deyarli tayyor. Yana 3 qadam (bir marta):
      bash tgbot/claude-proot.sh
    kirgandan keyin /exit
 
-2) Telegram akkauntingizni ulang (faqat o'qish uchun):
+2) Telegram akkauntingizni ulang (o'qish; yozish/storis/profil — faqat sizning ✅ ruxsatingiz bilan):
    https://my.telegram.org -> API development tools -> api_id va api_hash
      nano .env        (TG_API_ID=..., TG_API_HASH=...)
      python3 tgbot/userbot.py login

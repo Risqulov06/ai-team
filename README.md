@@ -30,6 +30,8 @@ Built in the Bekhruz AI series "Build Your AI Team". Episode 4 built this as a t
 > - 4 Claude Code agents in `.claude/agents/`: **scheduler** (Telegram chats → who does what and when), **hisobchi** (Uzcard / Humo expenses), **marketing** (Instagram content plan), **montaj** (video editing)
 > - new skills: **timetable**, **planner**, **ops**, **hisob**
 > - a Telegram bot (`tgbot/`): daily plan, timetable, reminders, expenses, content plan, recurring tasks
+> - your own Telegram as an MCP server (`telegram`, `tgbot/tg_mcp.py`): `/ai <order>` reads chats, contacts and bots, and writes to people and groups, posts stories, changes the profile, uses bots — **every action waits for your ✅ in the bot**, is asked again every hour, and is dropped if you answered that chat yourself
+> - agents **telegramchi** (any Telegram order), **kotib** (secretary: answers incoming messages by your work plan), **nazoratchi** (workers: warning before work, attendance, asking why someone didn't come), **sotuvchi** (Shoxsaroy Towers buyers)
 >
 > Guides (in Russian): free hosting on Render + Neon — [RENDER.md](RENDER.md) · Android phone — [PHONE.md](PHONE.md) · ready prompts — [PROMPTS.md](PROMPTS.md)
 
@@ -78,7 +80,7 @@ Skills can improve too. When a step keeps going wrong, Claude proposes a change 
 
 - The agent may only run the skill scripts, move clips from `inbox/` to `done/` and write into `out/` (`.claude/settings.json`).
 - Deleting files and network tools like `curl` are blocked. Pushing to git asks you first.
-- Nothing is uploaded or posted. You review `out/` and publish yourself.
+- Nothing is uploaded or posted without you. On Telegram the agent only proposes; the bot does it after your ✅ (`tgbot/actions.py`). The agent cannot read `.secrets/` or edit the approval queue.
 - Installing skills from other people? Read them first, or ask Claude to read one and list every file, command and network call before you use it.
 
 ## License
